@@ -218,7 +218,9 @@ local function distributeShares(ip, port, processID, shares, headcount)
       local masterCb = function(clients, _)
         for i, client in ipairs(clients) do
           local share = shares[i]
-          local bytes, snderr, _ = client:send(processID .. "/" .. tostring(share) .. "\n")
+          local bytes, snderr, _ = retry(function()
+            return client:send(processID .. "/" .. tostring(share) .. "\n")
+          end)
           if snderr or not bytes then
             error("* failed to send message: " .. snderr)
           end
