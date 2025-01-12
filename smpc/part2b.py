@@ -43,8 +43,12 @@ def main():
     print_access(access)
     print("Step 4, Bob generate r and calculate, send p0, enc_y2 and obtain p2")
     r = getPrime(len(bin(p))//2-1)
-    """This enc_y2 can be done different. But Bob knows Alice enc_x1 and enc_y1"""
-    """This might cause the encryption to break, we can do it differently but then C and D are not calculated as complete."""
+    """This enc_y2 does not need to be send, it can be done different.
+        I think the system does not break because the constant factor is not known to alice.
+        White sharing this, it will be.
+        We can partially calculate c and d and then send it over, but I am not sure if we leak information, since there is a constant data and a lot of data send over.
+        
+        Or maybe it is better to let Alice and Bob encrypt A -x1 and B-y2 to the server then the server does the rest."""
     enc_y2 = enc(n,g,y2)
     p0 = pow(enc_x1,y2, n^2) * pow(enc_y1,x2, n^2) * enc(n,g,n-r)
     p2 = enc(n,g,x2*y2 + r)
