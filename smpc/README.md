@@ -2,16 +2,7 @@
 
 ## Overview
 
-This project demonstrates a cryptographic protocol to compute the weighted sum:
-
-**S = Σ (w\_i \* x\_i)**
-
-where:
-
-- **x\_i**: Secret input of participant **i**
-- **w\_i**: Public weight for **x\_i**
-
-The protocol ensures input privacy, so no participant learns another's secret input.
+This project demonstrates a cryptographic protocol to compute the weighted sum, while ensuring input privacy, so no participant learns another's secret input. Communication is achieved over TCP connections between the participants for reliable data transfer. Due to theoretical perfect-privacy, data encryption is not necessary.
 
 ## Prerequisites
 
@@ -31,10 +22,6 @@ The protocol ensures input privacy, so no participant learns another's secret in
    ```
 
 ## Run
-
-The **first participant** must declare the total number of participants. If omitted, the default value is `3`. Other participants connect automatically.
-
-### Example
 
 #### First Participant:
 
