@@ -28,17 +28,18 @@ This project demonstrates a cryptographic protocol to compute the weighted sum, 
 Run the following command to start the first participant:
 
 ```bash
-lua participant.lua [number_of_participants]
+lua participant.lua [number_of_participants] [sec]
 ```
 
 - Replace `[number_of_participants]` with the desired total.
 - If omitted, the default number of participants is `3`.
+- Use `sec` to output secure data aswell to stdout.
 
 #### Other Participants:
 
 Subsequent participants can join with:
 
 ```bash
-lua participant.lua
+lua participant.lua [sec]
 ```
 

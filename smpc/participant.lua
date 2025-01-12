@@ -1,5 +1,18 @@
 local libsocket = require("socket")
 
+-- default log
+local function log(message)
+  local timestamp = os.date("%Y-%m-%d %H:%M:%S")
+  print("[" .. timestamp .. "]: " .. message)
+end
+
+-- log secret values
+local function sec(message)
+  if (arg[2] or arg[1]) ~= "sec" then return end
+  local timestamp = os.date("%Y-%m-%d %H:%M:%S")
+  print("{" .. timestamp .. "}: " .. message)
+end
+
 -- retry wrapper for robust calls
 local function retry(task, retries, delay)
   retries = retries or 4
@@ -13,13 +26,16 @@ local function retry(task, retries, delay)
     else
       if attempt < retries then
         os.execute("sleep " .. delay)
+        delay = delay * 1.5
       end
     end
   end
 
-  error("* task failed after retiries")
+  -- chrash code, something is up
+  error("* task failed after multiple retries")
 end
 
+-- TODO: async
 -- serve message to socket for n clients
 local function serve(ip, port, message, broadcast, callback)
   -- default to one-to-one
@@ -35,13 +51,13 @@ local function serve(ip, port, message, broadcast, callback)
   -- shutdown method
   local clients = {}
   local function shutdown()
-    print("> served data on " .. ip .. ":" .. port .. " for " .. broadcast)
+    log("served data on " .. ip .. ":" .. port .. " for " .. broadcast)
     for _, client in ipairs(clients) do client:close() end
     server:close()
   end
 
   -- accept clients
-  print("> waiting on participants")
+  log("waiting on participants")
   for _ = 1, broadcast do
     local client, accerr = server:accept()
     if accerr or not client then
@@ -51,10 +67,10 @@ local function serve(ip, port, message, broadcast, callback)
   end
 
   -- serve clients with data
-  for i, client in ipairs(clients) do
-    if callback ~= nil then
-      callback(client, message, i)
-    else
+  if callback ~= nil then
+    callback(clients, message)
+  else
+    for _, client in ipairs(clients) do
       local bytes, snderr, _ = client:send(tostring(message) .. "\n")
       if snderr or not bytes then
         error("* failed to send message: " .. snderr)
@@ -66,15 +82,8 @@ local function serve(ip, port, message, broadcast, callback)
   shutdown()
 end
 
--- async serve function
-local function serveAsync(ip, port, message, broadcast, callback)
-  return coroutine.create(function()
-    serve(ip, port, message, broadcast, callback)
-  end)
-end
-
 -- eat one message from socket
-local function eat(ip, port)
+local function eat(ip, port, callback)
   -- init tcp object
   local client, tcperr = libsocket.tcp()
   if tcperr or not client then
@@ -89,13 +98,19 @@ local function eat(ip, port)
   end
 
   -- read message from server
-  local data, recerr, _ = client:receive()
-  if recerr or not data then
-    client:close()
-    error("* failed to read: " .. recerr)
+  local data = nil
+  if callback ~= nil then
+    data = callback(client)
+  else
+    local recerr = nil
+    data, recerr, _ = client:receive()
+    if recerr or not data then
+      client:close()
+      error("* failed to read: " .. recerr)
+    end
   end
 
-  print("> read from " .. ip .. ":" .. port)
+  log("read from " .. ip .. ":" .. port)
 
   client:close()
   return data
@@ -127,17 +142,22 @@ end
 local function setup(ip, port, headcount)
   -- try to bind it as server
   local temp, tmperr = libsocket.bind(ip, port)
-  local callback = function(client, message, context)
-    local bytes, snderr, _ = client:send(tostring(context + 1) .. "/" .. tostring(message) .. "\n")
-    if snderr or not bytes then
-      error("* failed to send message: " .. snderr)
+  local callback = function(clients, message)
+    for i, client in ipairs(clients) do
+      local bytes, snderr, _ = client:send(tostring(i + 1) .. "/" .. tostring(message) .. "\n")
+      if snderr or not bytes then
+        error("* failed to send message: " .. snderr)
+      end
     end
   end
 
+  -- master
   if temp and not tmperr then
+    log("starting setup as master")
+
     temp:close()
     local weights = {}
-    if headcount == nil then headcount = 3 end
+    headcount = headcount or 3
 
     -- create weights
     for _ = 1, headcount do
@@ -148,125 +168,172 @@ local function setup(ip, port, headcount)
     local processID = 1
     local public = formatPublic(weights)
     serve(ip, port, public, headcount - 1, callback)
-    print("> public parameters sent")
+    log("public parameters are sent to participants")
 
     -- return headcount
     return weights, headcount, processID
   else
+    log("joining setup as slave")
     -- connect to master
     local public = retry(function() return eat(ip, port) end)
 
     -- process public parameters
     -- TODO: check validity
-    print("> received public parameters: " .. public)
     local weights, processID = processPublic(public)
+    log("received public parameters [pid/weights]: " .. public)
 
     -- return headcount and pid
     return weights, #weights, processID
   end
 end
 
-local function generateShares(secret, headcount, prime)
+-- generate shares form secret
+local function generateShares(secret, public, headcount)
+  log("generating shares from secret")
   local sum = 0
   local shares = {}
   -- generate n-1 random shares
   for _ = 1, headcount - 1 do
-    local share = math.random(0, prime - 1)
+    local share = math.random(0, public["prime"] - 1)
+    sec("generated share " .. share)
     table.insert(shares, share)
-    sum = (sum + share) % prime
+    sum = (sum + share) % public["prime"]
   end
 
   -- compute the final share to ensure the sum is secret mod prime
-  local lastShare = (secret - sum) % prime
+  local lastShare = (secret - sum) % public["prime"]
   table.insert(shares, lastShare)
+  sec("final share is " .. lastShare)
 
-  print("> private shares generated")
+  log("private shares are generated")
   return shares
 end
 
-local function distributeShares(ip, port, processID, shares)
-  local allShares = {}
-  -- iterate shares
-  for token = 1, #shares do
-    -- share
+local function distributeShares(ip, port, processID, shares, headcount)
+  log("distributing private shares")
+  local collectedShares = {}
+  for token = 1, headcount do
     if token == processID then
-      for i = 1, #shares do
-        if i ~= processID then
-          coroutine.resume(serveAsync(ip, port + i, shares[i]))
-        else
-          -- store own share at processID
-          allShares[token] = shares[i]
+      -- callback
+      local masterCb = function(clients, _)
+        for i, client in ipairs(clients) do
+          local share = shares[i]
+          local bytes, snderr, _ = client:send(processID .. "/" .. tostring(share) .. "\n")
+          if snderr or not bytes then
+            error("* failed to send message: " .. snderr)
+          end
         end
       end
-    else -- collect
-      local data = retry(function()
-        return eat(ip, port + processID)
+
+      -- call server function
+      serve(ip, port, shares, headcount - 1, masterCb)
+      collectedShares[processID] = shares[processID]
+    else
+      -- callback
+      local slaveCb = function(client)
+        local data, recerr, _ = client:receive()
+        if recerr or not data then
+          client:close()
+          error("* failed to read: " .. recerr)
+        end
+
+        -- parse the return value
+        for pid, share in string.gmatch(data, "(%d+)/(%d+)") do
+          return pid, share -- TODO: verify data
+        end
+      end
+
+      -- call client function
+      local pid, share = retry(function()
+        return eat(ip, port, slaveCb)
       end)
-      allShares[token] = tonumber(data)
+
+      -- store received data
+      -- TODO: maybe closure
+      collectedShares[pid] = tonumber(share)
     end
   end
 
-  print("> private shares distributed")
-  return allShares
+  log("private shares are distributed")
+  return collectedShares
 end
 
-local function calculatePartialSum(allShares, public)
+-- calcualte partial sum from shares
+local function calculatePartialSum(collectedShares, public)
+  log("calculating partial sum with collected shares")
   local partialSum = 0
-  for i, share in ipairs(allShares) do
+  for i, share in ipairs(collectedShares) do
     partialSum = partialSum + share * public["weights"][i]
     partialSum = partialSum % public["prime"]
   end
+
+  log("partial sum is calculated")
   return partialSum
 end
 
-local function distributePartialSum(ip, port, partialSum, headcount, processID)
+-- serve partial sum to all participants
+local function distributePartialSum(ip, port, processID, partialSum, headcount)
+  log("distributing partial sums")
   local partialSums = {}
   for token = 1, headcount do
     if token == processID then
       serve(ip, port, partialSum, headcount - 1)
       table.insert(partialSums, partialSum)
-      print("> partial sum revealed")
+      log("partial sum is revealed")
     else
       -- connect to master
       local partial = retry(function() return eat(ip, port) end)
       table.insert(partialSums, tonumber(partial))
-      print("> received partial sum")
+      log("received partial sum from " .. token)
     end
   end
+
+  log("partial sums are distributed")
   return partialSums
 end
 
-local function calculateWeightedSum(partialSums, prime)
+-- calculate weighted sum from partial sums
+local function calculateWeightedSum(partialSums, public)
+  log("calculating weighted sum")
   local weightedSum = 0
   for _, s in ipairs(partialSums) do
     weightedSum = weightedSum + s
-    weightedSum = weightedSum % prime
+    weightedSum = weightedSum % public["prime"]
   end
 
+  log("weighted sum is calculated")
   return weightedSum
 end
 
--- public parameters
-local public = {}
-public["prime"] = 2 ^ 31 - 1 -- Mersenne prime
-math.randomseed(os.time())
+-- main skeleton for communication
+local function protocol(ip, port)
+  -- public parameters
+  local public = {}
+  local headcount, processID = nil, nil
+  math.randomseed(os.time())
 
-local ip, port = "127.0.0.1", 42424
-local weights, headcount, processID = setup(ip, port, tonumber(arg[1]))
-public["weights"] = weights
+  -- initialize public parameters
+  public["prime"] = 2 ^ 31 - 1 -- Mersenne prime
+  public["weights"], headcount, processID = setup(ip, port, tonumber(arg[1]))
 
--- generate secret
-math.randomseed(os.time() + processID)
-local secret = math.random(0, public["prime"] - 1)
+  -- generate secret
+  math.randomseed(os.time() + processID)
+  local secret = math.random(0, public["prime"] - 1)
+  sec("prime used for protocol is " .. public["prime"])
+  sec("generated secret is " .. secret)
 
--- generate and distribute shares
-local shares = generateShares(secret, #public["weights"], public["prime"])
-local allShares = distributeShares(ip, port, processID, shares)
+  -- generate and distribute shares
+  local shares = generateShares(secret, public, headcount)
+  local collectedShares = distributeShares(ip, port, processID, shares, headcount)
 
--- calculate and distribute partial sum
-local partialSum = calculatePartialSum(allShares, public)
-local allPartialSums = distributePartialSum(ip, port, partialSum, headcount, processID)
+  -- calculate and distribute partial sum
+  local partialSum = calculatePartialSum(collectedShares, public)
+  local collectedPartialSums = distributePartialSum(ip, port, processID, partialSum, headcount)
 
--- calculate weighted sum
-local weightedSum = calculateWeightedSum(allPartialSums, public["prime"])
-print("> calculated weighted sum: " .. weightedSum)
+  -- calculate weighted sum
+  local weightedSum = calculateWeightedSum(collectedPartialSums, public)
+  log("weighted sum: " .. weightedSum)
+end
+
+-- start protocol
+protocol("127.0.0.1", 53709)
