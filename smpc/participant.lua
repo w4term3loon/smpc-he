@@ -1,10 +1,5 @@
 local libsocket = require("socket")
 
--- public parameters
-local publicW = {}
-local publicP = 2 ^ 31 - 1 -- mersenne prime
-local processID = nil
-
 -- retry wrapper for robust calls
 local function retry(task, retries, delay)
   retries = retries or 4
@@ -26,7 +21,7 @@ local function retry(task, retries, delay)
 end
 
 -- serve message to socket for n clients
-local function serve(ip, port, message, broadcast)
+local function serve(ip, port, message, broadcast, callback)
   -- default to one-to-one
   broadcast = broadcast or 1
 
@@ -56,15 +51,26 @@ local function serve(ip, port, message, broadcast)
   end
 
   -- serve clients with data
-  for _, client in ipairs(clients) do
-    local bytes, snderr, _ = client:send(tostring(message) .. "\n")
-    if snderr or not bytes then
-      error("* failed to send message: " .. snderr)
+  for i, client in ipairs(clients) do
+    if callback ~= nil then
+      callback(client, message, i)
+    else
+      local bytes, snderr, _ = client:send(tostring(message) .. "\n")
+      if snderr or not bytes then
+        error("* failed to send message: " .. snderr)
+      end
     end
   end
 
   -- shutdown
   shutdown()
+end
+
+-- async serve function
+local function serveAsync(ip, port, message, broadcast, callback)
+  return coroutine.create(function()
+    serve(ip, port, message, broadcast, callback)
+  end)
 end
 
 -- eat one message from socket
@@ -76,7 +82,6 @@ local function eat(ip, port)
   end
 
   -- connect to server
-  client:settimeout(5)
   local status, conerr = client:connect(ip, port)
   if conerr or not status then
     client:close()
@@ -110,54 +115,43 @@ end
 -- slave
 -- extract public parameters
 local function processPublic(public)
-  processID = tonumber(public:match("([^/]+)"))
+  local weights = {}
+  local processID = tonumber(public:match("([^/]+)"))
   public = public:gsub("%d+/", "")
   for c in public:gmatch("([^:]+)") do
-    table.insert(publicW, c)
+    table.insert(weights, c)
   end
+  return weights, processID
 end
 
 local function setup(ip, port, headcount)
   -- try to bind it as server
-  local master, binerr = libsocket.bind(ip, port)
-
-  if master and not binerr then
-    -- shutdown method
-    local slaves = {}
-    local function shutdown()
-      print("> served data on " .. ip .. ":" .. port .. " for " .. headcount - 1)
-      for _, client in ipairs(slaves) do client:close() end
-      master:close()
+  local temp, tmperr = libsocket.bind(ip, port)
+  local callback = function(client, message, context)
+    local bytes, snderr, _ = client:send(tostring(context + 1) .. "/" .. tostring(message) .. "\n")
+    if snderr or not bytes then
+      error("* failed to send message: " .. snderr)
     end
+  end
 
-    -- accept slaves
-    print("> waiting on participants")
-    for n = 1, headcount - 1 do
-      local slave, accerr = master:accept()
-      if accerr or not slave then
-        error("* failed to accept client: " .. accerr)
-      end
-      table.insert(slaves, slave)
-      print("> " .. n .. " parties joined already")
-    end
+  if temp and not tmperr then
+    temp:close()
+    local weights = {}
+    if headcount == nil then headcount = 3 end
 
     -- create weights
     for _ = 1, headcount do
-      table.insert(publicW, math.random(1, 10))
+      table.insert(weights, math.random(1, 10))
     end
 
     -- serve slaves with data
-    processID = 1
-    local public = formatPublic(publicW)
-    for i, slave in ipairs(slaves) do
-      local bytes, snderr, _ = slave:send(i + 1 .. "/" .. public .. "\n")
-      if snderr or not bytes then
-        error("* failed to send message: " .. snderr)
-      end
-    end
-
-    shutdown()
+    local processID = 1
+    local public = formatPublic(weights)
+    serve(ip, port, public, headcount - 1, callback)
     print("> public parameters sent")
+
+    -- return headcount
+    return weights, headcount, processID
   else
     -- connect to master
     local public = retry(function() return eat(ip, port) end)
@@ -165,62 +159,69 @@ local function setup(ip, port, headcount)
     -- process public parameters
     -- TODO: check validity
     print("> received public parameters: " .. public)
-    processPublic(public)
+    local weights, processID = processPublic(public)
+
+    -- return headcount and pid
+    return weights, #weights, processID
   end
 end
 
-local ownShares = {}
 local function generateShares(secret, headcount, prime)
   local sum = 0
+  local shares = {}
   -- generate n-1 random shares
   for _ = 1, headcount - 1 do
     local share = math.random(0, prime - 1)
-    table.insert(ownShares, share)
+    table.insert(shares, share)
     sum = (sum + share) % prime
   end
 
   -- compute the final share to ensure the sum is secret mod prime
   local lastShare = (secret - sum) % prime
-  table.insert(ownShares, lastShare)
+  table.insert(shares, lastShare)
+
   print("> private shares generated")
+  return shares
 end
 
-local compoundShares = {}
-local function distributeShares(ip, port)
+local function distributeShares(ip, port, processID, shares)
+  local allShares = {}
   -- iterate shares
-  for token = 1, #ownShares do
+  for token = 1, #shares do
     -- share
     if token == processID then
-      for i = 1, #ownShares do
+      for i = 1, #shares do
         if i ~= processID then
-          serve(ip, port + i, ownShares[i])
+          coroutine.resume(serveAsync(ip, port + i, shares[i]))
         else
           -- store own share at processID
-          compoundShares[token] = ownShares[i]
+          allShares[token] = shares[i]
         end
       end
     else -- collect
       local data = retry(function()
         return eat(ip, port + processID)
       end)
-      compoundShares[token] = tonumber(data)
+      allShares[token] = tonumber(data)
     end
   end
+
   print("> private shares distributed")
+  return allShares
 end
 
-local function calculatePartialSum()
+local function calculatePartialSum(allShares, public)
   local partialSum = 0
-  for i, share in ipairs(compoundShares) do
-    partialSum = partialSum + share * publicW[i]
-    partialSum = partialSum % publicP
+  for i, share in ipairs(allShares) do
+    partialSum = partialSum + share * public["weights"][i]
+    partialSum = partialSum % public["prime"]
   end
   return partialSum
 end
 
-local function distributePartialSum(ip, port, partialSum, headcount)
+local function distributePartialSum(ip, port, partialSum, headcount, processID)
   local partialSums = {}
-  for token = 1, #publicW do
+  for token = 1, headcount do
     if token == processID then
       serve(ip, port, partialSum, headcount - 1)
       table.insert(partialSums, partialSum)
@@ -235,28 +236,37 @@ local function distributePartialSum(ip, port, partialSum, headcount)
   return partialSums
 end
 
-local function calculateWeightedSum(partialSums)
+local function calculateWeightedSum(partialSums, prime)
   local weightedSum = 0
   for _, s in ipairs(partialSums) do
     weightedSum = weightedSum + s
-    weightedSum = weightedSum % publicP
+    weightedSum = weightedSum % prime
   end
 
   return weightedSum
 end
 
--- set seed for random
+-- public parameters
+local public = {}
+public["prime"] = 2 ^ 31 - 1 -- Mersenne prime
 math.randomseed(os.time())
 
--- generate secret
-local secret = math.random(0, publicP - 1)
-local headcount = 3
 local ip, port = "127.0.0.1", 42424
+local weights, headcount, processID = setup(ip, port, tonumber(arg[1]))
+public["weights"] = weights
 
-setup(ip, port, headcount)
-generateShares(secret, #publicW, publicP)
-distributeShares(ip, port)
-local partialSum = calculatePartialSum()
-local partialSums = distributePartialSum(ip, port, partialSum, headcount)
-local weightedSum = calculateWeightedSum(partialSums)
+-- generate secret
+math.randomseed(os.time() + processID)
+local secret = math.random(0, public["prime"] - 1)
+
+-- generate and distribute shares
+local shares = generateShares(secret, #public["weights"], public["prime"])
+local allShares = distributeShares(ip, port, processID, shares)
+
+-- calculate and distribute partial sum
+local partialSum = calculatePartialSum(allShares, public)
+local allPartialSums = distributePartialSum(ip, port, partialSum, headcount, processID)
+
+-- calculate weighted sum
+local weightedSum = calculateWeightedSum(allPartialSums, public["prime"])
 print("> calculated weighted sum: " .. weightedSum)
