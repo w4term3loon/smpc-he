@@ -33,7 +33,7 @@ lua participant.lua [number_of_participants] [sec]
 
 - Replace `[number_of_participants]` with the desired total.
 - If omitted, the default number of participants is `3`.
-- Use `sec` to output secure data aswell to stdout.
+- Use `sec` to output secure data aswell to `stdout`.
 
 #### Other Participants:
 
@@ -43,3 +43,14 @@ Subsequent participants can join with:
 lua participant.lua [sec]
 ```
 
+#### Swarm simulation:
+
+To simulate multiple participants in one process, run:
+
+```bash
+chmod +x swarm.sh
+./swarm.sh [number_of_participants]
+```
+
+- Logs will be generated in `log/{timestamp}`
+- Results are compared at the end.
