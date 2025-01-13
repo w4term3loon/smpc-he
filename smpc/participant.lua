@@ -15,6 +15,8 @@ local function sec(message)
 end
 
 -- retry wrapper for robust calls
+-- sockets are sometimes prone to timing
+-- errors, this makes it easy to use them
 local function retry(task, retries, delay)
   retries = retries or 4
   delay = delay or 1
@@ -168,7 +170,10 @@ local function setup(ip, port, headcount)
     -- serve slaves with data
     local processID = 1
     local public = formatPublic(weights)
-    serve(ip, port, public, headcount - 1, callback)
+    retry(function()
+      return serve(ip, port, public, headcount - 1, callback)
+    end)
+
     log("public parameters are sent to participants")
 
     -- return headcount
@@ -229,7 +234,9 @@ local function distributeShares(ip, port, processID, shares, headcount)
       end
 
       -- call server function
-      serve(ip, port, shares, headcount - 1, masterCb)
+      retry(function()
+        return serve(ip, port, shares, headcount - 1, masterCb)
+      end)
       collectedShares[processID] = shares[processID]
     else
       -- callback
@@ -280,7 +287,9 @@ local function distributePartialSum(ip, port, processID, partialSum, headcount)
   local partialSums = {}
   for token = 1, headcount do
     if token == processID then
-      serve(ip, port, partialSum, headcount - 1)
+      retry(function()
+        return serve(ip, port, partialSum, headcount - 1)
+      end)
       table.insert(partialSums, partialSum)
       log("partial sum is revealed")
     else
