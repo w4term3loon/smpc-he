@@ -3,6 +3,9 @@ local libsocket = require("socket")
 
 local minipc = {}
 
+minipc.ip = "127.0.0.1"
+minipc.port = 6969
+
 -- default log
 function minipc.log(message)
   local timestamp = os.date("%Y-%m-%d %H:%M:%S")
@@ -42,12 +45,12 @@ end
 
 -- TODO: async
 -- serve message to socket for n clients
-function minipc.serve(ip, port, message, broadcast, callback)
+function minipc:serve(message, broadcast, callback)
   -- default to one-to-one
   broadcast = broadcast or 1
 
   -- init tcp object as server
-  local server, binerr = libsocket.bind(ip, port)
+  local server, binerr = libsocket.bind(self.ip, self.port)
   if binerr or not server then
     error("* failed to create server: " .. binerr)
     return
@@ -56,13 +59,13 @@ function minipc.serve(ip, port, message, broadcast, callback)
   -- shutdown method
   local clients = {}
   local function shutdown()
-    minipc.log("served data on " .. ip .. ":" .. port .. " for " .. broadcast)
+    minipc.log("served data on " .. self.ip .. ":" .. self.port .. " for " .. broadcast)
     for _, client in ipairs(clients) do client:close() end
     server:close()
   end
 
   -- accept clients
-  log("waiting on participants")
+  self.log("waiting on participants")
   for _ = 1, broadcast do
     local client, accerr = server:accept()
     if accerr or not client then
@@ -88,7 +91,7 @@ function minipc.serve(ip, port, message, broadcast, callback)
 end
 
 -- eat one message from socket
-function minipc.eat(ip, port, callback)
+function minipc:eat(callback)
   -- init tcp object
   local client, tcperr = libsocket.tcp()
   if tcperr or not client then
@@ -96,7 +99,7 @@ function minipc.eat(ip, port, callback)
   end
 
   -- connect to server
-  local status, conerr = client:connect(ip, port)
+  local status, conerr = client:connect(self.ip, self.port)
   if conerr or not status then
     client:close()
     error("* failed to connect: " .. conerr)
@@ -115,7 +118,7 @@ function minipc.eat(ip, port, callback)
     end
   end
 
-  minipc.log("read from " .. ip .. ":" .. port)
+  minipc.log("read from " .. self.ip .. ":" .. self.port)
 
   client:close()
   return data

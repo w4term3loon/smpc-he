@@ -1,5 +1,5 @@
-local libipc = dofile("../minipc.lua")
-local libsocket = require("socket")
+local ipc = dofile("../minipc.lua")
+local soc = require("socket")
 
 -- master
 -- format public parameters
@@ -24,9 +24,9 @@ local function processPublic(public)
   return weights, processID
 end
 
-local function setup(ip, port, headcount)
+local function setup(headcount)
   -- try to bind it as server
-  local temp, tmperr = libsocket.bind(ip, port)
+  local temp, tmperr = soc.bind(ipc.ip, ipc.port)
   local callback = function(clients, message)
     for i, client in ipairs(clients) do
       local bytes, snderr, _ = client:send(tostring(i + 1) .. "/" .. tostring(message) .. "\n")
@@ -38,7 +38,7 @@ local function setup(ip, port, headcount)
 
   -- master
   if temp and not tmperr then
-    libipc.log("starting setup as master")
+    ipc.log("starting setup as master")
 
     temp:close()
     local weights = {}
@@ -52,23 +52,23 @@ local function setup(ip, port, headcount)
     -- serve slaves with data
     local processID = 1
     local public = formatPublic(weights)
-    libipc.retry(function()
-      return libipc.serve(ip, port, public, headcount - 1, callback)
+    ipc.retry(function()
+      return ipc:serve(public, headcount - 1, callback)
     end)
 
-    libipc.log("public parameters are sent to participants")
+    ipc.log("public parameters are sent to participants")
 
     -- return headcount
     return weights, headcount, processID
   else
-    libipc.log("joining setup as slave")
+    ipc.log("joining setup as slave")
     -- connect to master
-    local public = libipc.retry(function() return libipc.eat(ip, port) end)
+    local public = ipc.retry(function() return ipc:eat() end)
 
     -- process public parameters
     -- TODO: check validity
     local weights, processID = processPublic(public)
-    libipc.log("received public parameters [pid/weights]: " .. public)
+    ipc.log("received public parameters [pid/weights]: " .. public)
 
     -- return headcount and pid
     return weights, #weights, processID
@@ -77,13 +77,13 @@ end
 
 -- generate shares form secret
 local function generateShares(secret, public, headcount)
-  libipc.log("generating shares from secret")
+  ipc.log("generating shares from secret")
   local sum = 0
   local shares = {}
   -- generate n-1 random shares
   for _ = 1, headcount - 1 do
     local share = math.random(0, public["prime"] - 1)
-    libipc.sec("generated share " .. share)
+    ipc.sec("generated share " .. share)
     table.insert(shares, share)
     sum = (sum + share) % public["prime"]
   end
@@ -91,14 +91,14 @@ local function generateShares(secret, public, headcount)
   -- compute the final share to ensure the sum is secret mod prime
   local lastShare = (secret - sum) % public["prime"]
   table.insert(shares, lastShare)
-  libipc.sec("final share is " .. lastShare)
+  ipc.sec("final share is " .. lastShare)
 
-  libipc.log("private shares are generated")
+  ipc.log("private shares are generated")
   return shares
 end
 
-local function distributeShares(ip, port, processID, shares, headcount)
-  libipc.log("distributing private shares")
+local function distributeShares(processID, shares, headcount)
+  ipc.log("distributing private shares")
   local collectedShares = {}
   for token = 1, headcount do
     if token == processID then
@@ -106,7 +106,7 @@ local function distributeShares(ip, port, processID, shares, headcount)
       local masterCb = function(clients, _)
         for i, client in ipairs(clients) do
           local share = shares[i]
-          local bytes, snderr, _ = libipc.retry(function()
+          local bytes, snderr, _ = ipc.retry(function()
             return client:send(processID .. "/" .. tostring(share) .. "\n")
           end)
           if snderr or not bytes then
@@ -116,8 +116,8 @@ local function distributeShares(ip, port, processID, shares, headcount)
       end
 
       -- call server function
-      libipc.retry(function()
-        return libipc.serve(ip, port, shares, headcount - 1, masterCb)
+      ipc.retry(function()
+        return ipc:serve(shares, headcount - 1, masterCb)
       end)
       collectedShares[processID] = shares[processID]
     else
@@ -136,8 +136,8 @@ local function distributeShares(ip, port, processID, shares, headcount)
       end
 
       -- call client function
-      local pid, share = libipc.retry(function()
-        return libipc.eat(ip, port, slaveCb)
+      local pid, share = ipc.retry(function()
+        return ipc:eat(slaveCb)
       end)
 
       -- store received data
@@ -146,56 +146,56 @@ local function distributeShares(ip, port, processID, shares, headcount)
     end
   end
 
-  libipc.log("private shares are distributed")
+  ipc.log("private shares are distributed")
   return collectedShares
 end
 
 -- calcualte partial sum from shares
 local function calculatePartialSum(collectedShares, public)
-  libipc.log("calculating partial sum with collected shares")
+  ipc.log("calculating partial sum with collected shares")
   local partialSum = 0
   for i, share in ipairs(collectedShares) do
     partialSum = partialSum + share * public["weights"][i]
     partialSum = partialSum % public["prime"]
   end
 
-  libipc.log("partial sum is calculated")
+  ipc.log("partial sum is calculated")
   return partialSum
 end
 
 -- serve partial sum to all participants
-local function distributePartialSum(ip, port, processID, partialSum, headcount)
-  libipc.log("distributing partial sums")
+local function distributePartialSum(processID, partialSum, headcount)
+  ipc.log("distributing partial sums")
   local partialSums = {}
   for token = 1, headcount do
     if token == processID then
-      libipc.retry(function()
-        return libipc.serve(ip, port, partialSum, headcount - 1)
+      ipc.retry(function()
+        return ipc:serve(partialSum, headcount - 1)
       end)
       table.insert(partialSums, partialSum)
-      libipc.log("partial sum is revealed")
+      ipc.log("partial sum is revealed")
     else
       -- connect to master
-      local partial = libipc.retry(function() return libipc.eat(ip, port) end)
+      local partial = ipc.retry(function() return ipc:eat() end)
       table.insert(partialSums, tonumber(partial))
-      libipc.log("received partial sum from " .. token)
+      ipc.log("received partial sum from " .. token)
     end
   end
 
-  libipc.log("partial sums are distributed")
+  ipc.log("partial sums are distributed")
   return partialSums
 end
 
 -- calculate weighted sum from partial sums
 local function calculateWeightedSum(partialSums, public)
-  libipc.log("calculating weighted sum")
+  ipc.log("calculating weighted sum")
   local weightedSum = 0
   for _, s in ipairs(partialSums) do
     weightedSum = weightedSum + s
     weightedSum = weightedSum % public["prime"]
   end
 
-  libipc.log("weighted sum is calculated")
+  ipc.log("weighted sum is calculated")
   return weightedSum
 end
 
@@ -206,27 +206,30 @@ local function protocol(ip, port)
   local headcount, processID = nil, nil
   math.randomseed(os.time())
 
+  ipc.ip = ip
+  ipc.port = port
+
   -- initialize public parameters
   public["prime"] = 2 ^ 31 - 1 -- Mersenne prime
-  public["weights"], headcount, processID = setup(ip, port, tonumber(arg[1]))
+  public["weights"], headcount, processID = setup(tonumber(arg[1]))
 
   -- generate secret
   math.randomseed(os.time() + processID)
   local secret = math.random(0, public["prime"] - 1)
-  libipc.sec("prime used for protocol is " .. public["prime"])
-  libipc.sec("generated secret is " .. secret)
+  ipc.sec("prime used for protocol is " .. public["prime"])
+  ipc.sec("generated secret is " .. secret)
 
   -- generate and distribute shares
   local shares = generateShares(secret, public, headcount)
-  local collectedShares = distributeShares(ip, port, processID, shares, headcount)
+  local collectedShares = distributeShares(processID, shares, headcount)
 
   -- calculate and distribute partial sum
   local partialSum = calculatePartialSum(collectedShares, public)
-  local collectedPartialSums = distributePartialSum(ip, port, processID, partialSum, headcount)
+  local collectedPartialSums = distributePartialSum(processID, partialSum, headcount)
 
   -- calculate weighted sum
   local weightedSum = calculateWeightedSum(collectedPartialSums, public)
-  libipc.log("weighted sum: " .. weightedSum)
+  ipc.log("weighted sum: " .. weightedSum)
 end
 
 -- start protocol

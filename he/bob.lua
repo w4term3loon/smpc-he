@@ -4,20 +4,22 @@ local pallier = require("pallier")
 local tools = require("tools")
 
 local function setup()
-  local message = pallier.p .. ":" .. pallier.q
-  ipc:serve(message)
+  local primes = ipc:eat()
+  print("got primes: " .. primes)
 end
 
 local function protocol(ip, port)
   ipc.ip = ip
   ipc.port = port
 
-  pallier:init(23, 73)
-
   setup()
 end
 
 protocol("127.0.0.1", 44242)
+
+-- define p and q
+pallier.p = 23
+pallier.q = 73
 
 -- beaver triplets
 math.randomseed(os.time())
