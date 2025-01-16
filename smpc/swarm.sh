@@ -10,7 +10,7 @@ mkdir -p "$LOG_DIR"
 
 # start master
 $EXECUTABLE "$HEADCOUNT" > "$LOG_DIR/master.log" 2>&1 & MASTER_PID=$!
-echo "Master process started (PID=$MASTER_PID), logs in $LOG_DIR/master.log"
+echo "Master process started, logs in $LOG_DIR/master.log"
 
 # start slaves
 for i in $(seq 2 $HEADCOUNT); do

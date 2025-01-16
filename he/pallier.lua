@@ -29,7 +29,7 @@ function pallier:encrypt(m)
     r = math.random(2, self.n - 1)
   end
 
-  -- Calculate c = (g^m * r^n) mod n^2
+  -- c = (g^m * r^n) mod n^2
   local g_m = tools.modularExp(self.g, m, self.n_squared)
   local r_n = tools.modularExp(r, self.n, self.n_squared)
   return (g_m * r_n) % self.n_squared
@@ -42,7 +42,7 @@ function pallier:decrypt(c)
   local g_lambda = tools.modularExp(self.g, self.lam, self.n_squared)
   local L_g = self:L(g_lambda)
 
-  -- Use modular multiplicative inverse instead of division
+  -- use modular multiplicative inverse instead of division
   local mu = tools.modInverse(L_g, self.n)
   return (L_c * mu) % self.n
 end
@@ -55,6 +55,55 @@ function pallier:print()
   print("n^2: " .. self.n_squared)
   print("lam: " .. (self.lam or "nil"))
   print("g: " .. self.g)
+end
+
+
+local function test_basic()
+  print("\nBasic encryption/decryption test:")
+  local m = 42
+  local c = pallier:encrypt(m)
+  local d = pallier:decrypt(c)
+  print("Original:", m)
+  print("Decrypted:", d)
+  assert(m == d, "Basic encryption/decryption failed")
+end
+
+local function test_addition()
+  print("\nHomomorphic addition test:")
+  local m1 = 30
+  local m2 = 40
+  print("m1:", m1)
+  print("m2:", m2)
+
+  local c1 = pallier:encrypt(m1)
+  local c2 = pallier:encrypt(m2)
+
+  local c_sum = (c1 * c2) % pallier.n_squared
+  local sum = pallier:decrypt(c_sum)
+
+  print("Decrypted sum:", sum)
+  assert(sum == (m1 + m2) % pallier.n, "Homomorphic addition failed")
+end
+
+local function test_mult_constant()
+  print("\nHomomorphic multiplication by constant test:")
+  local m = 30
+  local k = 40
+  print("m:", m)
+  print("k:", k)
+
+  local c = pallier:encrypt(m)
+  local c_mult = tools.modularExp(c, k, pallier.n_squared)
+  local result = pallier:decrypt(c_mult)
+
+  print("Decrypted result:", result)
+  assert(result == (m * k) % pallier.n, "Homomorphic multiplication failed")
+end
+
+function pallier:test()
+  test_basic()
+  test_addition()
+  test_mult_constant()
 end
 
 return pallier
