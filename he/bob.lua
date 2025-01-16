@@ -15,31 +15,32 @@ function bob.unpack(msg, delim)
 end
 
 function bob:setup()
-  local msg = ipc.retry(function()
-    return ipc:eat()
-  end)
-  local primes = self.unpack(msg)
-  local p, q = tonumber(primes[1]), tonumber(primes[2])
-  pallier:init(p, q)
-end
-
-function bob:vector()
-  self.vec = 12
-  local dim = tonumber(ipc.retry(function()
+  -- eat public params
+  local public = self.unpack(ipc.retry(function()
     return ipc:eat()
   end))
-  ipc.log("dimension is: " .. dim)
+
+  -- init bob with n, g
+  local n, g = tonumber(public[1]), tonumber(public[2])
+  pallier:initbob(n, g)
+
+  -- gen vec
+  self.dim = tonumber(ipc.retry(function()
+    return ipc:eat()
+  end))
+  self.vec = tools.genVec(self.dim, pallier.n)
+  ipc.log("vec is: " .. tools.formatVec(self.vec))
 end
 
 function bob:beaver()
-  local msg = ipc.retry(function()
+  -- eat alice beaver share
+  local unpack = self.unpack(ipc.retry(function()
     return ipc:eat()
-  end)
-  local unpack = self.unpack(msg)
+  end))
   self.enc_alice_x = tonumber(unpack[1])
   self.enc_alice_y = tonumber(unpack[2])
 
-  -- random beaver shares
+  -- gen random beaver shares
   self.x = math.random(0, pallier.n - 1)
   self.y = math.random(0, pallier.n - 1)
 
@@ -67,8 +68,8 @@ function bob:beaver()
   ipc.log("beaver triplets shared")
 end
 
-function bob:de()
-  self.enc_e_share = pallier:encrypt(self.vec - self.y)
+function bob:de(com)
+  self.enc_e_share = pallier:encrypt(com - self.y)
 
   -- eat alice's share
   self.enc_d_share = tonumber(ipc.retry(function()
@@ -98,9 +99,13 @@ function bob:de()
   ipc.log("de: " .. self.d .. ":" .. self.e)
 end
 
-function bob:final()
+function bob:addw()
   -- final product share
-  self.w = (self.d * self.y + self.e * self.x + self.z) % pallier.n
+  self.w = self.w or 0
+  self.w = (self.w + self.d * self.y + self.e * self.x + self.z) % pallier.n
+end
+
+function bob:mul()
   self.enc_w = pallier:encrypt(self.w) -- ?
 
   -- serve w to alice
@@ -116,6 +121,14 @@ function bob:final()
   ipc.log("mul is: " .. self.mul)
 end
 
+function bob:iterate()
+  for _, com in ipairs(self.vec) do
+    self:beaver()
+    self:de(com)
+    self:addw()
+  end
+end
+
 local function protocol(ip, port)
   ipc.ip = ip
   ipc.port = port
@@ -123,11 +136,8 @@ local function protocol(ip, port)
   math.randomseed(os.time())
 
   bob:setup()
-  bob:vector()
-  bob:beaver()
-  bob:de()
-  bob:final()
+  bob:iterate()
+  bob:mul()
 end
 
 protocol("127.0.0.1", 44242)
-

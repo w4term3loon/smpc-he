@@ -51,8 +51,15 @@ function tools.genVec(dim, n)
   for i = 1, dim do
     vec[i] = math.random(0, n - 1)
   end
-
   return vec
+end
+
+function tools.formatVec(vec)
+  local out = "["
+  for _, v in ipairs(vec) do
+    out = out .. v .. ", "
+  end
+  return (out:sub(1, #out - 2) .. "]")
 end
 
 return tools

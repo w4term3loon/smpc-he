@@ -2,13 +2,19 @@ local tools = require("tools")
 
 local pallier = {}
 
-function pallier:init(p, q)
-  pallier.p = p or 23 -- default
-  pallier.q = q or 73 -- default
-  pallier.n = pallier.p * pallier.q
-  pallier.n_squared = pallier.n * pallier.n
-  pallier.lam = tools:lcm(pallier.p - 1, pallier.q - 1)
-  pallier.g = pallier.n + 1
+function pallier:initalice(p, q)
+  self.p = p or 23 -- default
+  self.q = q or 73 -- default
+  self.n = self.p * self.q
+  self.n_squared = self.n * self.n
+  self.lam = tools:lcm(self.p - 1, self.q - 1)
+  self.g = self.n + 1
+end
+
+function pallier:initbob(n, g)
+  self.n = n
+  self.n_squared = self.n * self.n
+  self.g = g
 end
 
 function pallier:L(x)
@@ -43,14 +49,12 @@ end
 
 function pallier:print()
   print("Pallier parameters:")
-  print("p: " .. self.p)
-  print("q: " .. self.q)
+  print("p: " .. (self.p or "nil"))
+  print("q: " .. (self.q or "nil"))
   print("n: " .. self.n)
   print("n^2: " .. self.n_squared)
-  print("lam: " .. self.lam)
+  print("lam: " .. (self.lam or "nil"))
   print("g: " .. self.g)
 end
-
-pallier:init()
 
 return pallier

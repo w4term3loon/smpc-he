@@ -14,10 +14,20 @@ function alice.pack(msg)
 end
 
 function alice:setup()
-  local pack = self.pack({ pallier.p, pallier.q })
+  -- init alice with p, q
+  pallier:initalice(13, 73)
+
+  -- share n
   ipc.retry(function()
-    return ipc:serve(pack)
+    return ipc:serve(self.pack({ pallier.n, pallier.g }))
   end)
+
+  -- gen vec
+  ipc.retry(function()
+    return ipc:serve(self.dim)
+  end)
+  self.vec = tools.genVec(self.dim, pallier.n)
+  ipc.log("vec is: " .. tools.formatVec(self.vec))
 end
 
 function alice:beaver()
@@ -41,15 +51,8 @@ function alice:beaver()
   ipc.log("beaver triplets shared")
 end
 
-function alice:vector(dim)
-  self.vec = 12 -- tools.genVec(dim, pallier.n)
-  ipc.retry(function()
-    return ipc:serve(dim)
-  end)
-end
-
-function alice:de()
-  self.enc_d_share = pallier:encrypt(self.vec - self.x)
+function alice:de(com)
+  self.enc_d_share = pallier:encrypt(com - self.x)
 
   -- serve share to bob
   ipc.retry(function()
@@ -80,17 +83,19 @@ function alice:de()
   ipc.log("de: " .. self.d .. ":" .. self.e)
 end
 
-function alice:final()
+function alice:addw()
+  -- alice's final share
+  self.w = self.w or 0
+  self.w = (self.w + self.d * self.e + self.d * self.y + self.e * self.x + self.z) % pallier.n
+end
+
+function alice:mul()
   -- bob's final share
   self.enc_bob_w = tonumber(ipc.retry(function()
     return ipc:eat()
   end))
   self.bob_w = pallier:decrypt(self.enc_bob_w)
 
-  -- alice's final share
-  self.w = (self.d * self.e + self.d * self.y + self.e * self.x + self.z) % pallier.n
-
-  -- mul
   self.mul = (self.w + self.bob_w) % pallier.n
   ipc.retry(function()
     return ipc:serve(self.mul)
@@ -99,18 +104,24 @@ function alice:final()
   ipc.log("mul is: " .. self.mul)
 end
 
+function alice:iterate()
+  for _, com in ipairs(self.vec) do
+    self:beaver()
+    self:de(com)
+    self:addw()
+  end
+end
+
 local function protocol(ip, port)
   ipc.ip = ip
   ipc.port = port
 
   math.randomseed(os.time())
-  pallier:init(13, 73)
 
+  alice.dim = arg[1] or 3
   alice:setup()
-  alice:vector(69)
-  alice:beaver()
-  alice:de()
-  alice:final()
+  alice:iterate()
+  alice:mul()
 end
 
 protocol("127.0.0.1", 44242)
