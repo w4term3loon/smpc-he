@@ -3,108 +3,119 @@ local ipc = dofile("../minipc.lua")
 local pallier = require("pallier")
 local tools = require("tools")
 
-local function setup()
-  local message = pallier.p .. ":" .. pallier.q
-  ipc:serve(message)
+local alice = {}
+
+function alice.pack(msg)
+  local pack = ""
+  for _, elem in ipairs(msg) do
+    pack = pack .. elem .. ":"
+  end
+  return pack:sub(1, #pack - 1)
+end
+
+function alice:setup()
+  local pack = self.pack({ pallier.p, pallier.q })
+  ipc.retry(function()
+    return ipc:serve(pack)
+  end)
+end
+
+function alice:beaver()
+  -- random beaver shares
+  self.x = math.random(0, pallier.n - 1)
+  self.y = math.random(0, pallier.n - 1)
+  self.enc_x = pallier:encrypt(self.x)
+  self.enc_y = pallier:encrypt(self.y)
+
+  -- pack and send msg
+  local pack = self.pack({ self.enc_x, self.enc_y })
+  ipc.retry(function()
+    return ipc:serve(pack)
+  end)
+
+  -- bob shares calculation
+  self.enc_xy_yx_r = tonumber(ipc.retry(function()
+    return ipc:eat()
+  end))
+  self.z = (self.x * self.y + pallier:decrypt(self.enc_xy_yx_r)) % pallier.n
+  ipc.log("beaver triplets shared")
+end
+
+function alice:vector(dim)
+  self.vec = 12 -- tools.genVec(dim, pallier.n)
+  ipc.retry(function()
+    return ipc:serve(dim)
+  end)
+end
+
+function alice:de()
+  self.enc_d_share = pallier:encrypt(self.vec - self.x)
+
+  -- serve share to bob
+  ipc.retry(function()
+    return ipc:serve(self.enc_d_share)
+  end)
+
+  -- eat bob's share
+  self.enc_e_share = tonumber(ipc.retry(function()
+    return ipc:eat()
+  end))
+
+  -- eat bob's d (xd)
+  self.enc_d = tonumber(ipc.retry(function()
+    return ipc:eat()
+  end))
+
+  -- calculate d and e
+  self.d = pallier:decrypt(self.enc_d)
+  self.e = (pallier:decrypt(self.enc_e_share) - self.y) % pallier.n
+
+  -- public params
+  -- TODO: could be encrypted since bob could
+  -- make use of the homomorphism of pallier (?)
+  ipc.retry(function()
+    return ipc:serve(self.pack({ self.d, self.e }))
+  end)
+
+  ipc.log("de: " .. self.d .. ":" .. self.e)
+end
+
+function alice:final()
+  -- bob's final share
+  self.enc_bob_w = tonumber(ipc.retry(function()
+    return ipc:eat()
+  end))
+  self.bob_w = pallier:decrypt(self.enc_bob_w)
+
+  -- alice's final share
+  self.w = (self.d * self.e + self.d * self.y + self.e * self.x + self.z) % pallier.n
+
+  -- mul
+  self.mul = (self.w + self.bob_w) % pallier.n
+  ipc.retry(function()
+    return ipc:serve(self.mul)
+  end)
+
+  ipc.log("mul is: " .. self.mul)
 end
 
 local function protocol(ip, port)
   ipc.ip = ip
   ipc.port = port
 
-  pallier:init(23, 73)
+  math.randomseed(os.time())
+  pallier:init(13, 73)
 
-  setup()
+  alice:setup()
+  alice:vector(69)
+  alice:beaver()
+  alice:de()
+  alice:final()
 end
 
 protocol("127.0.0.1", 44242)
 
--- beaver triplets
-math.randomseed(os.time())
-local alice = {}
-alice.x = math.random(0, pallier.n - 1)
-alice.y = math.random(0, pallier.n - 1)
-alice.enc_x = pallier:encrypt(alice.x)
-alice.enc_y = pallier:encrypt(alice.y)
-
--- send it to bob
-local bob = {}
-bob.enc_alice_x = alice.enc_x
-bob.enc_alice_y = alice.enc_y
-assert(alice.x == pallier:decrypt(bob.enc_alice_x))
-assert(alice.y == pallier:decrypt(bob.enc_alice_y))
-
-bob.x = math.random(0, pallier.n - 1)
-bob.y = math.random(0, pallier.n - 1)
-bob.r = math.random(0, pallier.n - 1)
-bob.enc_r = pallier:encrypt(bob.r)
-assert(bob.r == pallier:decrypt(bob.enc_r))
-
--- x_A * y_B
-bob.enc_xy = tools.modularExp(bob.enc_alice_x, bob.y, pallier.n_squared)
-assert((alice.x * bob.y) % pallier.n == pallier:decrypt(bob.enc_xy))
--- y_A * x_B
-bob.enc_yx = tools.modularExp(bob.enc_alice_y, bob.x, pallier.n_squared)
-assert((alice.y * bob.x) % pallier.n == pallier:decrypt(bob.enc_yx))
-
--- x_A * y_B + y_A * x_B + r
-bob.enc_xy_yx_r = (bob.enc_xy * bob.enc_yx * bob.enc_r) % pallier.n_squared
-assert((alice.x * bob.y + alice.y * bob.x + bob.r) % pallier.n == pallier:decrypt(bob.enc_xy_yx_r))
-
-bob.z = bob.x * bob.y - bob.r
--- bob sends back
-alice.z = alice.x * alice.y + pallier:decrypt(bob.enc_xy_yx_r)
-
--- test
-local xy = (bob.x + alice.x) * (bob.y + alice.y) % pallier.n
-local zz = (bob.z + alice.z) % pallier.n
-assert(xy == zz)
-
--- vector mul
-alice.u = io.read("*n")
-bob.v = io.read("*n")
-
--- create d and e
-alice.enc_d_share = pallier:encrypt(alice.u - alice.x)
-bob.enc_e_share = pallier:encrypt(bob.v - bob.y)
-
--- trade
-bob.enc_d_share = alice.enc_d_share
-alice.enc_e_share = bob.enc_e_share
-
--- bob
-bob.enc_d = (bob.enc_d_share * pallier:encrypt((-1) * bob.x)) % pallier.n_squared
-alice.enc_d = bob.enc_d -- share
-
--- alice
-alice.e = (pallier:decrypt(alice.enc_e_share) - alice.y) % pallier.n
-alice.d = pallier:decrypt(alice.enc_d)
-assert((bob.v - (alice.y + bob.y)) % pallier.n == alice.e)
-assert((alice.u - (alice.x + bob.x)) % pallier.n == alice.d)
-
--- correctness
-local left = (alice.u * bob.v) % pallier.n
-local right = ((alice.d + alice.x + bob.x) * (alice.e + alice.y + bob.y)) % pallier.n
-assert(left == right)
-
--- public
-bob.e = alice.e
-bob.d = alice.d
-
--- bob
-bob.w = (bob.d * bob.y + bob.e * bob.x + bob.z) % pallier.n
-bob.enc_w = pallier:encrypt(bob.w) -- ?
-alice.enc_bob_w = bob.enc_w        -- share
-
--- alice
-alice.bob_w = pallier:decrypt(alice.enc_bob_w)
-assert(alice.bob_w == bob.w)
-alice.w = (alice.d * alice.e + alice.d * alice.y + alice.e * alice.x + alice.z) % pallier.n
-alice.ww = (alice.w + alice.bob_w) % pallier.n
-bob.ww = alice.ww --share
-
-print("mul is: " .. alice.ww)
-
+-- TODO: move to pallier
 -- Basic encryption/decryption test
 local function test_basic()
   print("\nBasic encryption/decryption test:")
