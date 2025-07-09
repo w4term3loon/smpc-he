@@ -1,6 +1,7 @@
 # MinIPC - Minimal IPC Library for Lua
 
-This component was made to compliment the Secure Multi-Party Computation and Secure Two-Party Vector Product Using Paillier Cryptosystem PoCs. Here is a brief about the IPC functionalities and in the designated folders I elaborate on the two implmentations in deeper spcifics.
+This component complements the Secure Multi-Party Computation and Secure Two-Party Vector Product Proofs of Concept using the Paillier Cryptosystem.
+Below is a brief overview of the IPC functionalities. Detailed descriptions of the two implementations can be found in their respective folders.
 
 ## Overview
 MiniPC is a lightweight Inter-Process Communication (IPC) library for Lua that provides robust TCP socket communication with automatic retry mechanisms. It simplifies client-server communication patterns with an emphasis on reliability and ease of use.
