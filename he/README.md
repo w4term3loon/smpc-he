@@ -2,6 +2,8 @@
 
 This implementation provides a secure two-party computation protocol for calculating the inner product of two private vectors using the Paillier cryptosystem and Beaver triples. The system consists of two parties (Alice and Bob) who wish to compute the product of their private vectors without revealing them to each other.
 
+![](screenshot.png)
+
 ## Overview
 
 The implementation includes four main components:

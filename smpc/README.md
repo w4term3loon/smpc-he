@@ -3,6 +3,8 @@
 ## Overview
 This project implements a secure multi-party computation (MPC) protocol for calculating weighted sums while preserving input privacy. Each participant contributes a secret value to a weighted sum computation without revealing their individual inputs to other participants.
 
+[](screenshot.png)
+
 ### Key Features
 - Secret sharing-based privacy preservation
 - Distributed weighted sum computation
